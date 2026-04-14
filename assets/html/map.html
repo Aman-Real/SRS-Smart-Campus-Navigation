@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Campus Navigation Map</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" 
+          integrity="sha256-kLaT2GOSpHechhsozzB+flnD+zUyjE2LlfWPgU02ies="
+          crossorigin=""/>
+    
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"
+            integrity="sha256-WBkoXxUvJZzh2B2M2O1q24E3nRR2qBiVi/yD6h0YWI="
+            crossorigin=""></script>
+    
+    <!-- Leaflet Routing Machine -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/osrm@latest/dist/osrm.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f5;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100vh;
+            z-index: 1;
+        }
+        
+        .info-panel {
+            padding: 10px 15px;
+            line-height: 1.5;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        
+        .info-panel h4 {
+            margin-bottom: 5px;
+            color: #333;
+            font-size: 16px;
+        }
+        
+        .info-panel p {
+            color: #666;
+            font-size: 13px;
+            margin: 3px 0;
+        }
+        
+        .marker-info {
+            width: 250px;
+        }
+        
+        .category-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            margin: 2px 0;
+            color: white;
+            font-weight: bold;
+        }
+        
+        .poi-amenities {
+            font-size: 12px;
+            margin-top: 5px;
+            color: #555;
+        }
+        
+        .action-buttons {
+            margin-top: 10px;
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        
+        .action-buttons button {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 3px;
+            background-color: #2D6A7B;
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .action-buttons button:hover {
+            background-color: #1a3f4a;
+        }
+        
+        .search-container {
+            position: absolute;
+            top: 10px;
+            left: 50px;
+            z-index: 999;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            width: 300px;
+        }
+        
+        .search-container input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        
+        .legend {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            line-height: 18px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        
+        .legend i {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            margin-right: 8px;
+            border-radius: 50%;
+        }
+        
+        .user-location {
+            background: #2D6A7B !important;
+        }
+        
+        .leaflet-routing-container {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <script>
+        // Send console logs to Flutter
+        const originalLog = console.log;
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            if (window.FlutterConsole) {
+                window.FlutterConsole.postMessage(args.join(' '));
+            }
+        };
+
+        // Initialize map
+        try {
+            const map = L.map('map').setView([30.400586, 78.078447], 16);
+            console.log('Map initialized successfully');
+            
+            // Add tile layer (OpenStreetMap)
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                tileSize: 256
+            }).addTo(map);
+            console.log('Tile layer added');
+        } catch (err) {
+            console.log('Map initialization error: ' + err.message);
+        }
+        
+        // Store for markers
+        let markers = {};
+        let currentRoute = null;
+        
+        // Custom marker icons
+        const createMarkerIcon = (categoryColor) => {
+            return L.divIcon({
+                html: `<div style="background-color: ${categoryColor}; width: 30px; height: 30px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 16px;">📍</div>`,
+                iconSize: [30, 30],
+                className: 'custom-marker'
+            });
+        };
+        
+        // Add markers to map
+        function addMarker(id, name, lat, lng, description, category, color, details = {}) {
+            try {
+                const icon = createMarkerIcon(color);
+                const marker = L.marker([lat, lng], { icon: icon }).addTo(map);
+                console.log('Marker added: ' + name);
+                
+                // Create popup content
+                let popupContent = `
+                    <div class="info-panel marker-info">
+                        <h4>${name}</h4>
+                        <span class="category-badge" style="background-color: ${color};">${category}</span>
+                        <p><strong>Description:</strong> ${description}</p>
+                `;
+            
+            if (details.buildingName) {
+                popupContent += `<p><strong>Building:</strong> ${details.buildingName}</p>`;
+            }
+            
+            if (details.floorNumber) {
+                popupContent += `<p><strong>Floor:</strong> ${details.floorNumber}</p>`;
+            }
+            
+            if (details.contactDetails) {
+                popupContent += `<p><strong>Contact:</strong> ${details.contactDetails}</p>`;
+            }
+            
+            if (details.openingHours) {
+                popupContent += `<p><strong>Hours:</strong> ${details.openingHours}</p>`;
+            }
+            
+            if (details.amenities && details.amenities.length > 0) {
+                popupContent += `<div class="poi-amenities"><strong>Amenities:</strong> ${details.amenities.join(', ')}</div>`;
+            }
+            
+            popupContent += `
+                    <div class="action-buttons">
+                        <button onclick="navigateTo(${lat}, ${lng})">Navigate</button>
+                        <button onclick="addFavorite('${id}')">Favorite</button>
+                    </div>
+                </div>
+            `;
+            
+            marker.bindPopup(popupContent);
+            marker.on('click', function() {
+                if (window.MapEvents) {
+                    window.MapEvents.postMessage(JSON.stringify({event: 'onMarkerClick', data: {id: id, name: name, lat: lat, lng: lng}}));
+                }
+            });
+
+            markers[id] = { marker: marker, lat: lat, lng: lng };
+            } catch (err) {
+                console.log('Error adding marker ' + name + ': ' + err.message);
+            }
+        }
+        
+        // Navigate to location
+        function navigateTo(lat, lng) {
+            try {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(function(position) {
+                        const userLat = position.coords.latitude;
+                        const userLng = position.coords.longitude;
+                    
+                        // Clear existing route
+                        if (currentRoute) {
+                            map.removeControl(currentRoute);
+                        }
+                        
+                        // Create new route
+                        currentRoute = L.Routing.control({
+                            waypoints: [
+                                L.latLng(userLat, userLng),
+                                L.latLng(lat, lng)
+                            ],
+                            routeWhileDragging: false,
+                            geocoder: L.Control.Geocoder.nominatim(),
+                            show: true
+                        }).addTo(map);
+                        
+                        if (window.MapEvents) {
+                            window.MapEvents.postMessage(JSON.stringify({event: 'onRouteCalculated', data: {
+                                startLat: userLat,
+                                startLng: userLng,
+                                endLat: lat,
+                                endLng: lng
+                            }}));
+                        }
+                    });
+                } else {
+                    console.log('Geolocation not supported');
+                }
+            } catch (err) {
+                console.log('Error navigating: ' + err.message);
+            }
+        }
+        
+        function addFavorite(poiId) {
+            try {
+                if (window.MapEvents) {
+                    window.MapEvents.postMessage(JSON.stringify({event: 'onFavoriteAdded', data: {id: poiId}}));
+                }
+            } catch (err) {
+                console.log('Error adding favorite: ' + err.message);
+            }
+        }
+        
+        // Add user location marker
+        function showUserLocation(lat, lng) {
+            try {
+                if (window.userLocation) {
+                    map.removeLayer(window.userLocation);
+                }
+                
+                window.userLocation = L.circleMarker([lat, lng], {
+                    radius: 7,
+                    fillColor: '#2D6A7B',
+                    color: '#fff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).addTo(map);
+                console.log('User location shown at ' + lat + ', ' + lng);
+            } catch (err) {
+                console.log('Error showing user location: ' + err.message);
+            }
+        }
+        
+        // Center map on location
+        function centerMapOnLocation(lat, lng) {
+            try {
+                map.setView([lat, lng], 16);
+                console.log('Map centered at ' + lat + ', ' + lng);
+            } catch (err) {
+                console.log('Error centering map: ' + err.message);
+            }
+        }
+        
+        // Clear all markers
+        function clearAllMarkers() {
+            try {
+                Object.values(markers).forEach(({ marker }) => {
+                    map.removeLayer(marker);
+                });
+                markers = {};
+            } catch (err) {
+                console.log('Error clearing markers: ' + err.message);
+            }
+        }
+        
+        // Clear route
+        function clearRoute() {
+            try {
+                if (currentRoute) {
+                    map.removeControl(currentRoute);
+                    currentRoute = null;
+                }
+                console.log('Route cleared');
+            } catch (err) {
+                console.log('Error clearing route: ' + err.message);
+            }
+        }
+        
+        // Initialize map ready message
+        window.addEventListener('load', function () {
+            console.log('Page load event triggered');
+            if (window.MapEvents) {
+                window.MapEvents.postMessage(JSON.stringify({event: 'onMapReady', data: {}}));
+            }
+        });
+        
+        // Export functions for Flutter
+        window.mapFunctions = {
+            addMarker: addMarker,
+            navigateTo: navigateTo,
+            showUserLocation: showUserLocation,
+            centerMapOnLocation: centerMapOnLocation,
+            clearAllMarkers: clearAllMarkers,
+            clearRoute: clearRoute
+        };
+        
+        console.log('Map initialization complete. mapFunctions exported.');
+        console.log('Map object: ' + (typeof map === 'undefined' ? 'undefined' : 'defined'));
+        console.log('mapFunctions available: ' + (typeof window.mapFunctions === 'undefined' ? 'no' : 'yes'));
+    </script>
+</body>
+</html>
